@@ -1,8 +1,13 @@
 package awscala.ec2
 
+import java.util
+
 import awscala._
+import com.amazonaws.services.ec2.model.{ BlockDeviceMapping, EbsBlockDevice, Tag }
+
 import scala.collection.JavaConverters._
 import com.amazonaws.services.{ ec2 => aws }
+
 import scala.annotation.tailrec
 
 object EC2 {
@@ -47,16 +52,29 @@ trait EC2 extends aws.AmazonEC2Async {
     imageId: String,
     keyPair: KeyPair,
     instanceType: InstanceType = InstanceType.T1_Micro,
+    name: String,
+    diskSize: Option[Int],
     min: Int = 1,
     max: Int = 1
   ): Seq[Instance] = {
 
-    runAndAwait(new RunInstancesRequest(imageId, min, max).withKeyName(keyPair.name).withInstanceType(instanceType))
+    val instanceReq = new RunInstancesRequest(imageId, min, max).withKeyName(keyPair.name).withInstanceType(instanceType)
+
+    if (diskSize.isDefined) {
+      val ebs = new EbsBlockDevice()
+      ebs.setVolumeSize(diskSize.get)
+      val bdm = new BlockDeviceMapping()
+      bdm.setDeviceName("/dev/sda1")
+      bdm.setEbs(ebs)
+      instanceReq.setBlockDeviceMappings(util.Arrays.asList(bdm))
+    }
+
+    runAndAwait(instanceReq, name)
   }
 
   @tailrec
   final def awaitInstances(awaiting: Seq[Instance], checkInterval: Long = 5000L): Seq[Instance] = {
-    val requested = instances(awaiting.map(_.instanceId))
+    val requested: Seq[Instance] = instances(awaiting.map(_.instanceId))
     if (requested.exists(_.state.getName == aws.model.InstanceStateName.Pending.toString)) {
       Thread.sleep(checkInterval)
       awaitInstances(awaiting, checkInterval)
@@ -65,7 +83,16 @@ trait EC2 extends aws.AmazonEC2Async {
     }
   }
 
-  def runAndAwait(request: aws.model.RunInstancesRequest): Seq[Instance] = awaitInstances(runInstances(request).getReservation.getInstances.asScala.map(Instance(_)))
+  def runAndAwait(request: aws.model.RunInstancesRequest, name: String): Seq[Instance] = {
+    val instances = runInstances(request).getReservation.getInstances.asScala.map(Instance(_))
+    instances foreach { instance =>
+      val nameTag = new Tag()
+      nameTag.setKey("Name")
+      nameTag.setValue(name)
+      instance.underlying.setTags(util.Arrays.asList(nameTag))
+    }
+    awaitInstances(instances)
+  }
 
   def start(instance: Instance*) = startInstances(new aws.model.StartInstancesRequest()
     .withInstanceIds(instance.map(_.instanceId): _*))
