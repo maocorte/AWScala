@@ -3,7 +3,7 @@ package awscala.ec2
 import java.util
 
 import awscala._
-import com.amazonaws.services.ec2.model.{ BlockDeviceMapping, EbsBlockDevice, Tag }
+import com.amazonaws.services.ec2.model.{ BlockDeviceMapping, EbsBlockDevice, Tag, VolumeType }
 
 import scala.collection.JavaConverters._
 import com.amazonaws.services.{ ec2 => aws }
@@ -51,25 +51,30 @@ trait EC2 extends aws.AmazonEC2Async {
   def runAndAwait(
     imageId: String,
     keyPair: KeyPair,
+    securityGroup: String = null,
     instanceType: InstanceType = InstanceType.T1_Micro,
-    name: String,
-    diskSize: Option[Int],
+    diskSize: Int,
     min: Int = 1,
     max: Int = 1
   ): Seq[Instance] = {
 
-    val instanceReq = new RunInstancesRequest(imageId, min, max).withKeyName(keyPair.name).withInstanceType(instanceType)
+    val instanceReq = new RunInstancesRequest(imageId, min, max)
+      .withKeyName(keyPair.name)
+      .withInstanceType(instanceType)
+      .withBlockDeviceMappings(getBlockDeviceMapping(diskSize))
+      .withSecurityGroups(securityGroup)
 
-    if (diskSize.isDefined) {
-      val ebs = new EbsBlockDevice()
-      ebs.setVolumeSize(diskSize.get)
-      val bdm = new BlockDeviceMapping()
-      bdm.setDeviceName("/dev/sda1")
-      bdm.setEbs(ebs)
-      instanceReq.setBlockDeviceMappings(util.Arrays.asList(bdm))
-    }
+    runAndAwait(instanceReq)
+  }
 
-    runAndAwait(instanceReq, name)
+  private final def getBlockDeviceMapping(size: Int): BlockDeviceMapping = {
+    val ebs = new EbsBlockDevice()
+    ebs.setVolumeType(VolumeType.Gp2)
+    ebs.setVolumeSize(size)
+    val bdm = new BlockDeviceMapping()
+    bdm.setDeviceName("/dev/sda1")
+    bdm.setEbs(ebs)
+    bdm
   }
 
   @tailrec
@@ -83,14 +88,8 @@ trait EC2 extends aws.AmazonEC2Async {
     }
   }
 
-  def runAndAwait(request: aws.model.RunInstancesRequest, name: String): Seq[Instance] = {
+  def runAndAwait(request: aws.model.RunInstancesRequest): Seq[Instance] = {
     val instances = runInstances(request).getReservation.getInstances.asScala.map(Instance(_))
-    instances foreach { instance =>
-      val nameTag = new Tag()
-      nameTag.setKey("Name")
-      nameTag.setValue(name)
-      instance.underlying.setTags(util.Arrays.asList(nameTag))
-    }
     awaitInstances(instances)
   }
 
