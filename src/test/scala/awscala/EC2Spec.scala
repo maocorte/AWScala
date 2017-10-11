@@ -37,7 +37,12 @@ class EC2Spec extends FlatSpec with Matchers {
       sys.process.Process(s"chmod 600 ${kpFile.getAbsolutePath}")
     }
 
-    ec2.runAndAwait("ami-2819aa29", keyPair).headOption.foreach { instance =>
+    val userData =
+      """#!bin/bash
+        |touch test.txt
+      """.stripMargin
+
+    ec2.runAndAwait(imageId = "ami-2819aa29", keyPair = keyPair, userData = userData).headOption.foreach { instance =>
       instance.withKeyPair(kpFile) { i =>
         i.ssh { client =>
           client.exec("ls -la").right.map { result =>
